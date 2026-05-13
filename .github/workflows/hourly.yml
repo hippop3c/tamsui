@@ -1,0 +1,36 @@
+name: Hourly YouBike fetch
+
+on:
+  schedule:
+    # 每個整點執行（UTC 時間，每小時的 0 分）
+    - cron: '0 * * * *'
+  workflow_dispatch:   # 也允許在 Actions 頁手動觸發
+
+permissions:
+  contents: write      # 允許 push 回 repo
+
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install requests
+        run: pip install requests
+
+      - name: Run fetch.py
+        run: python fetch.py
+
+      - name: Commit & push if changed
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add data.json
+          git diff --staged --quiet || git commit -m "Update data.json $(date -u +'%Y-%m-%d %H:%M:%S UTC')"
+          git push
