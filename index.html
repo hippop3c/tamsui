@@ -1,0 +1,514 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>淡水・八里 YouBike 整點監測</title>
+<style>
+  :root {
+    --bg: #0e1f2a;
+    --bg-2: #14304a;
+    --panel: rgba(255,255,255,0.06);
+    --panel-border: rgba(255,255,255,0.12);
+    --ink: #f3f7fa;
+    --ink-dim: #8fa6b5;
+    --accent: #6fd3c8;
+    --accent-2: #ffd166;
+    --warn: #ef6f6c;
+    --ok: #6fd3c8;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; padding: 0;
+    min-height: 100vh;
+    background:
+      radial-gradient(1200px 600px at 80% -10%, rgba(111,211,200,0.18), transparent 60%),
+      radial-gradient(900px 500px at -10% 110%, rgba(255,209,102,0.10), transparent 60%),
+      linear-gradient(180deg, var(--bg), var(--bg-2));
+    color: var(--ink);
+    font-family: "Noto Sans TC", "PingFang TC", "Microsoft JhengHei", system-ui, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 1100px; margin: 0 auto; padding: 40px 24px 80px; }
+  header {
+    display: flex; align-items: flex-end; justify-content: space-between;
+    gap: 24px; flex-wrap: wrap;
+    border-bottom: 1px solid var(--panel-border);
+    padding-bottom: 20px; margin-bottom: 28px;
+  }
+  h1 {
+    font-family: "Noto Serif TC", "PingFang TC", serif;
+    font-weight: 700;
+    font-size: clamp(24px, 3.2vw, 38px);
+    margin: 0 0 6px;
+    letter-spacing: 0.5px;
+  }
+  .sub { color: var(--ink-dim); font-size: 14px; letter-spacing: 0.5px; }
+  .clock { text-align: right; font-variant-numeric: tabular-nums; }
+  .clock .now { font-size: 28px; font-weight: 600; color: var(--accent); }
+  .clock .next { font-size: 13px; color: var(--ink-dim); margin-top: 4px; }
+
+  .toolbar {
+    display: flex; gap: 10px; align-items: center;
+    margin-bottom: 20px; flex-wrap: wrap;
+  }
+  button {
+    background: var(--accent); color: #0e1f2a;
+    border: none; padding: 10px 18px;
+    border-radius: 999px; font-weight: 600; font-size: 14px;
+    cursor: pointer;
+    transition: transform .15s ease, box-shadow .15s ease;
+  }
+  button:hover { transform: translateY(-1px); box-shadow: 0 6px 18px rgba(111,211,200,0.25); }
+  button.ghost {
+    background: transparent; color: var(--ink);
+    border: 1px solid var(--panel-border);
+  }
+  .status { margin-left: auto; font-size: 13px; color: var(--ink-dim); }
+  .status.ok { color: var(--ok); }
+  .status.warn { color: var(--warn); }
+  .data-time {
+    font-size: 13px; color: var(--ink-dim);
+    padding: 6px 12px;
+    background: var(--panel); border: 1px solid var(--panel-border);
+    border-radius: 999px;
+  }
+  .data-time strong { color: var(--accent); font-weight: 600; }
+
+  .grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+    gap: 16px;
+  }
+  .card {
+    background: var(--panel);
+    border: 1px solid var(--panel-border);
+    border-radius: 16px;
+    padding: 20px;
+    backdrop-filter: blur(6px);
+    position: relative; overflow: hidden;
+  }
+  .card::before {
+    content: "";
+    position: absolute; inset: 0;
+    background: linear-gradient(135deg, rgba(111,211,200,0.08), transparent 60%);
+    pointer-events: none;
+  }
+  .card h2 {
+    font-size: 17px; margin: 0 0 14px;
+    font-weight: 600; letter-spacing: 0.3px;
+  }
+  .nums { display: flex; gap: 18px; align-items: baseline; }
+  .num { display: flex; flex-direction: column; gap: 4px; }
+  .num .v {
+    font-size: 38px; font-weight: 700;
+    font-variant-numeric: tabular-nums; line-height: 1;
+    color: var(--ink);
+  }
+  .num .l { font-size: 12px; color: var(--ink-dim); letter-spacing: 1px; }
+  .num.empty .v { color: var(--accent-2); }
+  .bar {
+    margin-top: 16px; height: 6px;
+    background: rgba(255,255,255,0.08);
+    border-radius: 999px; overflow: hidden;
+  }
+  .bar > span {
+    display: block; height: 100%;
+    background: linear-gradient(90deg, var(--accent), #b6f1ea);
+    border-radius: 999px;
+    transition: width .6s ease;
+  }
+  .meta {
+    margin-top: 10px; font-size: 12px; color: var(--ink-dim);
+    display: flex; justify-content: space-between;
+  }
+
+  .history {
+    margin-top: 36px;
+  }
+  .history h3 {
+    font-family: "Noto Serif TC", serif;
+    font-size: 18px; font-weight: 600;
+    margin: 0 0 12px; letter-spacing: 0.5px;
+  }
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+    background: var(--panel);
+    border: 1px solid var(--panel-border);
+    border-radius: 12px;
+    overflow: hidden;
+  }
+  th, td {
+    padding: 10px 12px;
+    text-align: left;
+    border-bottom: 1px solid var(--panel-border);
+  }
+  th {
+    background: rgba(255,255,255,0.04);
+    font-weight: 600; color: var(--ink-dim);
+    letter-spacing: 0.5px; font-size: 12px;
+  }
+  td { font-variant-numeric: tabular-nums; }
+  tr:last-child td { border-bottom: none; }
+  .empty-row td {
+    text-align: center;
+    color: var(--ink-dim);
+    padding: 22px;
+  }
+  .copybox {
+    margin: 0 0 28px;
+    background: var(--panel);
+    border: 1px solid var(--panel-border);
+    border-radius: 16px;
+    padding: 18px 20px;
+    position: relative;
+  }
+  .copybox-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 10px;
+  }
+  .copybox-title {
+    font-size: 13px;
+    color: var(--ink-dim);
+    letter-spacing: 1px;
+  }
+  .copy-btn {
+    background: var(--accent);
+    color: #0e1f2a;
+    border: none;
+    padding: 6px 14px;
+    border-radius: 999px;
+    font-weight: 600;
+    font-size: 13px;
+    cursor: pointer;
+    transition: all .15s ease;
+  }
+  .copy-btn:hover { transform: translateY(-1px); box-shadow: 0 4px 12px rgba(111,211,200,0.25); }
+  .copy-btn.copied {
+    background: var(--accent-2);
+  }
+  .copytext {
+    font-family: "Menlo", "Consolas", "Noto Sans Mono CJK TC", monospace;
+    font-size: 15px;
+    line-height: 1.9;
+    color: var(--ink);
+    white-space: pre;
+    overflow-x: auto;
+    user-select: all;
+    cursor: text;
+    background: rgba(0,0,0,0.18);
+    padding: 14px 18px;
+    border-radius: 10px;
+    border: 1px solid rgba(255,255,255,0.04);
+  }
+
+  footer {
+    margin-top: 30px;
+    color: var(--ink-dim); font-size: 12px; line-height: 1.7;
+  }
+  footer a { color: var(--accent); text-decoration: none; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header>
+    <div>
+      <h1>淡水・八里 YouBike 整點監測</h1>
+      <div class="sub">每個整點自動更新 ・ 資料來源：新北市政府 OpenData</div>
+    </div>
+    <div class="clock">
+      <div class="now" id="clockNow">--:--:--</div>
+      <div class="next" id="clockNext">下次更新：--:--</div>
+    </div>
+  </header>
+
+  <div class="toolbar">
+    <button id="refreshBtn">立即更新</button>
+    <button id="clearBtn" class="ghost">清除歷史</button>
+    <span class="data-time">API 時間：<strong id="dataTime">載入中…</strong></span>
+    <div class="status" id="status">準備中…</div>
+  </div>
+
+  <section class="copybox">
+    <div class="copybox-header">
+      <span class="copybox-title">複製文字（直接貼給同事）</span>
+      <button id="copyBtn" class="copy-btn">📋 複製</button>
+    </div>
+    <div class="copytext" id="copyText">載入中…</div>
+  </section>
+
+  <div class="grid" id="grid"></div>
+
+  <section class="history">
+    <h3>整點歷史紀錄</h3>
+    <table>
+      <thead>
+        <tr>
+          <th>時間</th>
+          <th>輕軌漁人碼頭</th>
+          <th>淡江大橋橋管</th>
+          <th>淡水轉運站</th>
+          <th>八里文化公園</th>
+        </tr>
+      </thead>
+      <tbody id="historyBody">
+        <tr class="empty-row"><td colspan="5">尚無紀錄。每到整點會自動寫入一筆。</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <footer>
+    說明：每個整點自動抓取一次資料，並寫入瀏覽器歷史紀錄。<br>
+    資料透過 Cloudflare Worker 代理，繞過新北市 API 的 CORS 限制。<br>
+    資料來源：<a href="https://data.ntpc.gov.tw/datasets/71cd1490-a2df-4198-bef1-318479775e8a" target="_blank" rel="noopener">新北市公共自行車租賃系統(YouBike2.0)</a>
+  </footer>
+</div>
+
+<script>
+// ---------- 設定 ----------
+// 直接用你之前架好的 Cloudflare Worker（會代理新北市 YouBike API + 加 CORS）
+const DATA_URL = "https://green-boat-a984.hippop3c.workers.dev/";
+
+const STATIONS = [
+  { key: "輕軌漁人碼頭", fallback: { sbi: 15, bemp: 65 } },
+  { key: "淡江大橋橋管", fallback: { sbi: 30, bemp: 10 } },
+  { key: "淡水轉運站",   fallback: { sbi: 14, bemp: 36 } },
+  { key: "八里文化公園", fallback: { sbi: 19, bemp: 41 } },
+];
+
+// 「淡江大橋橋管」這個關鍵字實際在 API 中可能是「橋管中心」或「淡江大橋橋管中心」等，
+// 用一組備援關鍵字模糊比對
+const MATCH_ALIASES = {
+  "淡江大橋橋管": ["淡江大橋橋管", "橋管中心", "橋管"],
+};
+
+// ---------- 渲染卡片骨架 ----------
+const grid = document.getElementById("grid");
+STATIONS.forEach(s => {
+  const card = document.createElement("div");
+  card.className = "card";
+  card.id = "card-" + s.key;
+  card.innerHTML = `
+    <h2>${s.key}</h2>
+    <div class="nums">
+      <div class="num"><span class="v" data-field="sbi">--</span><span class="l">車輛數</span></div>
+      <div class="num empty"><span class="v" data-field="bemp">--</span><span class="l">空位數</span></div>
+    </div>
+    <div class="bar"><span data-bar style="width:0%"></span></div>
+    <div class="meta"><span data-tot>總車格 --</span><span data-time>--</span></div>
+  `;
+  grid.appendChild(card);
+});
+
+function setCard(name, data) {
+  const card = document.getElementById("card-" + name);
+  if (!card) return;
+  card.querySelector('[data-field="sbi"]').textContent = data.sbi;
+  card.querySelector('[data-field="bemp"]').textContent = data.bemp;
+  const tot = (typeof data.tot === "number" && data.tot > 0)
+              ? data.tot : (data.sbi + data.bemp);
+  card.querySelector('[data-tot]').textContent = "總車格 " + tot;
+  card.querySelector('[data-time]').textContent = formatMday(data.mday);
+  const pct = tot > 0 ? Math.round((data.sbi / tot) * 100) : 0;
+  card.querySelector('[data-bar]').style.width = pct + "%";
+}
+
+function formatMday(s) {
+  if (!s) return "";
+  if (/^\d{14}$/.test(s)) {
+    return s.slice(4,6) + "/" + s.slice(6,8) + " " + s.slice(8,10) + ":" + s.slice(10,12);
+  }
+  const d = new Date(s);
+  if (!isNaN(d)) {
+    return (d.getMonth()+1).toString().padStart(2,"0") + "/" +
+           d.getDate().toString().padStart(2,"0") + " " +
+           d.getHours().toString().padStart(2,"0") + ":" +
+           d.getMinutes().toString().padStart(2,"0");
+  }
+  return s;
+}
+
+// ---------- 產生「複製用文字」 ----------
+function updateCopyText(results) {
+  const lines = STATIONS.map(s => {
+    const r = results[s.key];
+    if (!r) return `${s.key} 在站-- 空位--`;
+    return `${s.key} 在站${r.sbi} 空位${r.bemp}`;
+  });
+  document.getElementById("copyText").textContent = lines.join("\n");
+}
+
+// ---------- 抓資料 ----------
+async function fetchYouBike(opts = {}) {
+  const isHourly = !!opts.hourly;
+  const status = document.getElementById("status");
+  status.className = "status";
+  status.textContent = "更新中…";
+
+  try {
+    const res = await fetch(DATA_URL, { cache: "no-store" });
+    if (!res.ok) throw new Error("HTTP " + res.status);
+    const data = await res.json();
+
+    if (!Array.isArray(data)) throw new Error("資料格式錯誤");
+
+    const results = {};
+    STATIONS.forEach(s => {
+      const keywords = MATCH_ALIASES[s.key] || [s.key];
+      // 找出所有名字符合的站點（同一個站可能會拆成 YouBike 2.0 + 2.0E 兩筆）
+      const hits = data.filter(d => {
+        const sna = (d.sna || "").replace(/^YouBike2\.0_?/, "");
+        return keywords.some(k => sna.includes(k));
+      });
+      if (hits.length > 0) {
+        // 車輛數 (sbi) 加總 = 普通車 + 電輔車
+        const sbi = hits.reduce((sum, h) => sum + Number(h.sbi || 0), 0);
+        // 空位 (bemp) 取最大值；車格 (tot) 也取最大（兩筆共用同一個實體站點）
+        const bemp = Math.max(...hits.map(h => Number(h.bemp || 0)));
+        const tot = Math.max(...hits.map(h => Number(h.tot || 0)));
+        // 時間取最新的
+        const mday = hits.map(h => h.mday || h.srcUpdateTime).filter(Boolean).sort().pop();
+        results[s.key] = { sbi, bemp, tot, mday };
+      } else {
+        results[s.key] = { ...s.fallback, tot: s.fallback.sbi + s.fallback.bemp, mday: "(找不到此站)" };
+      }
+    });
+
+    STATIONS.forEach(s => setCard(s.key, results[s.key]));
+    updateCopyText(results);
+    // API 自己回的最新時間（取四站中最新）
+    const apiTime = Object.values(results)
+      .map(r => r.mday).filter(x => x && !x.startsWith("("))
+      .sort().pop();
+    document.getElementById("dataTime").textContent = formatMday(apiTime) || "—";
+    status.className = "status ok";
+    status.textContent = "已更新 " + new Date().toLocaleTimeString("zh-TW", { hour12: false });
+    if (isHourly) appendHistory(results);
+    return results;
+  } catch (err) {
+    console.error(err);
+    STATIONS.forEach(s => {
+      setCard(s.key, { ...s.fallback, tot: s.fallback.sbi + s.fallback.bemp, mday: "(API 失敗・預設值)" });
+    });
+    status.className = "status warn";
+    status.textContent = "連線失敗：" + err.message;
+    return null;
+  }
+}
+
+// ---------- 歷史紀錄 ----------
+const STORAGE_KEY = "youbike_tamsui_history";
+function loadHistory() {
+  try { return JSON.parse(localStorage.getItem(STORAGE_KEY) || "[]"); }
+  catch { return []; }
+}
+function saveHistory(arr) {
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(arr.slice(-100)));
+}
+function appendHistory(results) {
+  if (!results) return;
+  const arr = loadHistory();
+  const now = new Date();
+  // 同一個整點不要重複寫
+  const lastT = arr.length ? new Date(arr[arr.length-1].t) : null;
+  if (lastT && lastT.getFullYear() === now.getFullYear()
+      && lastT.getMonth() === now.getMonth()
+      && lastT.getDate() === now.getDate()
+      && lastT.getHours() === now.getHours()) {
+    return;
+  }
+  const entry = { t: now.toISOString() };
+  STATIONS.forEach(s => { entry[s.key] = results[s.key]; });
+  arr.push(entry);
+  saveHistory(arr);
+  renderHistory();
+}
+function renderHistory() {
+  const tbody = document.getElementById("historyBody");
+  const arr = loadHistory().slice().reverse();
+  if (arr.length === 0) {
+    tbody.innerHTML = '<tr class="empty-row"><td colspan="5">尚無紀錄。每到整點會自動寫入一筆。</td></tr>';
+    return;
+  }
+  tbody.innerHTML = arr.map(row => {
+    const d = new Date(row.t);
+    const ts = d.toLocaleString("zh-TW", { hour12: false });
+    const cell = r => r ? `${r.sbi} 車 / ${r.bemp} 空` : "--";
+    return `<tr>
+      <td>${ts}</td>
+      <td>${cell(row["輕軌漁人碼頭"])}</td>
+      <td>${cell(row["淡江大橋橋管"])}</td>
+      <td>${cell(row["淡水轉運站"])}</td>
+      <td>${cell(row["八里文化公園"])}</td>
+    </tr>`;
+  }).join("");
+}
+
+// ---------- 時鐘與整點排程 ----------
+function tickClock() {
+  const now = new Date();
+  document.getElementById("clockNow").textContent =
+    now.toLocaleTimeString("zh-TW", { hour12: false });
+  const next = new Date(now);
+  next.setHours(now.getHours() + 1, 0, 0, 0);
+  document.getElementById("clockNext").textContent =
+    "下次更新：" + next.getHours().toString().padStart(2,"0") + ":00";
+}
+setInterval(tickClock, 1000);
+tickClock();
+
+function scheduleHourly() {
+  const now = new Date();
+  const next = new Date(now);
+  next.setHours(now.getHours() + 1, 0, 5, 0); // 整點 +5 秒
+  const wait = next - now;
+  setTimeout(async () => {
+    await fetchYouBike({ hourly: true });
+    setInterval(() => fetchYouBike({ hourly: true }), 60 * 60 * 1000);
+  }, wait);
+}
+
+// ---------- 事件 ----------
+document.getElementById("refreshBtn").addEventListener("click", () => fetchYouBike());
+document.getElementById("clearBtn").addEventListener("click", () => {
+  if (confirm("確定要清除所有歷史紀錄嗎？")) {
+    localStorage.removeItem(STORAGE_KEY);
+    renderHistory();
+  }
+});
+document.getElementById("copyBtn").addEventListener("click", async () => {
+  const text = document.getElementById("copyText").textContent;
+  const btn = document.getElementById("copyBtn");
+  try {
+    await navigator.clipboard.writeText(text);
+    btn.textContent = "✓ 已複製";
+    btn.classList.add("copied");
+    setTimeout(() => {
+      btn.textContent = "📋 複製";
+      btn.classList.remove("copied");
+    }, 1800);
+  } catch (e) {
+    // 舊瀏覽器 fallback
+    const range = document.createRange();
+    range.selectNodeContents(document.getElementById("copyText"));
+    const sel = window.getSelection();
+    sel.removeAllRanges();
+    sel.addRange(range);
+    try { document.execCommand("copy"); btn.textContent = "✓ 已複製"; }
+    catch { btn.textContent = "請手動複製"; }
+    setTimeout(() => { btn.textContent = "📋 複製"; }, 1800);
+  }
+});
+
+// ---------- 啟動 ----------
+renderHistory();
+fetchYouBike();
+scheduleHourly();
+</script>
+</body>
+</html>
