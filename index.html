@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>新北 YouBike 整點監測</title>
+<title>雙北 YouBike 整點監測</title>
 <style>
   :root {
     --bg: #0e1f2a;
@@ -287,8 +287,8 @@
 
   <header>
     <div>
-      <h1>新北 YouBike 整點監測</h1>
-      <div class="sub">多專案分組 ・ 每個整點自動更新 ・ 資料來源：新北市政府 OpenData</div>
+      <h1>雙北 YouBike 整點監測</h1>
+      <div class="sub">雙北涵蓋 ・ 多專案分組 ・ 每個整點自動更新</div>
     </div>
     <div class="clock">
       <div class="now" id="clockNow">--:--:--</div>
@@ -308,8 +308,7 @@
 
   <footer>
     所有專案設定**共用**：任何同事新增/編輯/刪除專案，會自動同步到雲端，其他人重新整理（或點「重新載入雲端設定」）就會看到。<br>
-    車輛數每整點自動更新（取自新北市政府開放資料）。<br>
-    資料透過 Cloudflare Worker 代理。資料來源：<a href="https://data.ntpc.gov.tw/datasets/71cd1490-a2df-4198-bef1-318479775e8a" target="_blank" rel="noopener">新北市公共自行車租賃系統(YouBike2.0)</a>
+    車輛數每整點自動更新。資料來源：<a href="https://data.ntpc.gov.tw/datasets/71cd1490-a2df-4198-bef1-318479775e8a" target="_blank" rel="noopener">新北市 YouBike2.0</a>（透過 Cloudflare Worker 代理）、<a href="https://data.taipei/dataset/detail?id=c6bc8aed-557d-41d5-bfb1-8da24f78f2fb" target="_blank" rel="noopener">臺北市 YouBike2.0</a>。
   </footer>
 </div>
 
@@ -343,9 +342,24 @@
 
 <script>
 // =========================================================
-//  YouBike 資料來源（Cloudflare Worker 代理）
+//  YouBike 資料來源
+//   - 新北：透過你架的 Cloudflare Worker 代理（API 不支援 CORS）
+//   - 台北：政府官方 API（有支援 CORS，可以直接打）
+//  欄位幾乎一致，合併進同一個 stationMap，用 sno 為 key。
+//  為了避免兩市可能撞 sno，會在 key 前面加上「TPE-」/「NTPC-」前綴。
 // =========================================================
-const DATA_URL = "https://green-boat-a984.hippop3c.workers.dev/";
+const SOURCES = [
+  {
+    city: "新北市",
+    prefix: "NTPC-",
+    url: "https://green-boat-a984.hippop3c.workers.dev/",
+  },
+  {
+    city: "臺北市",
+    prefix: "TPE-",
+    url: "https://tcgbusfs.blob.core.windows.net/dotapp/youbike/v2/youbike_immediate.json",
+  },
+];
 
 // =========================================================
 //  雲端共用設定（JSONBin.io）
@@ -446,56 +460,90 @@ let allStations = [];   // 從 API 抓的全部站點
 let stationMap = {};    // sno -> station object
 
 // =========================================================
-//  抓資料 & 合併同站的 2.0 + 2.0E
+//  抓資料 & 合併（雙北 + 同站的 2.0 / 2.0E）
 // =========================================================
 async function fetchYouBike() {
   const status = document.getElementById("status");
   status.className = "status";
   status.textContent = "更新中…";
 
-  try {
-    const res = await fetch(DATA_URL, { cache: "no-store" });
-    if (!res.ok) throw new Error("HTTP " + res.status);
-    const raw = await res.json();
-    if (!Array.isArray(raw)) throw new Error("資料格式錯誤");
+  const merged = {};
+  const errors = [];
 
-    // 用 sno 合併同站的多筆紀錄（YouBike 2.0 + 2.0E）
-    const merged = {};
-    raw.forEach(d => {
-      const sno = d.sno;
-      if (!sno) return;
-      const sna = (d.sna || "").replace(/^YouBike2\.0_?/, "");
-      if (!merged[sno]) {
-        merged[sno] = {
-          sno,
-          sna,
-          sarea: d.sarea || "",
-          ar: d.ar || "",
-          sbi: 0, bemp: 0, tot: 0,
-          mday: "",
-        };
-      }
-      merged[sno].sbi  += Number(d.sbi  || 0);
-      merged[sno].bemp = Math.max(merged[sno].bemp, Number(d.bemp || 0));
-      merged[sno].tot  = Math.max(merged[sno].tot,  Number(d.tot  || 0));
-      const t = d.mday || d.srcUpdateTime || "";
-      if (t > merged[sno].mday) merged[sno].mday = t;
-    });
+  // 並行抓兩個來源
+  await Promise.all(SOURCES.map(async src => {
+    try {
+      const res = await fetch(src.url, { cache: "no-store" });
+      if (!res.ok) throw new Error("HTTP " + res.status);
+      const raw = await res.json();
+      if (!Array.isArray(raw)) throw new Error("格式錯誤");
+      raw.forEach(d => {
+        const sno = d.sno;
+        if (!sno) return;
+        const key = src.prefix + sno;
+        const sna = (d.sna || "").replace(/^YouBike2\.0_?/, "");
+        if (!merged[key]) {
+          merged[key] = {
+            sno: key,                 // 帶前綴的唯一 ID
+            rawSno: sno,
+            city: src.city,
+            sna,
+            sarea: d.sarea || "",
+            ar: d.ar || "",
+            sbi: 0, bemp: 0, tot: 0,
+            mday: "",
+          };
+        }
+        merged[key].sbi  += Number(d.sbi  || 0);
+        merged[key].bemp = Math.max(merged[key].bemp, Number(d.bemp || 0));
+        merged[key].tot  = Math.max(merged[key].tot,  Number(d.tot  || 0));
+        const t = d.mday || d.srcUpdateTime || "";
+        if (t > merged[key].mday) merged[key].mday = t;
+      });
+    } catch (err) {
+      console.error(src.city + " 抓取失敗：", err);
+      errors.push(`${src.city}: ${err.message}`);
+    }
+  }));
 
-    allStations = Object.values(merged);
-    stationMap = merged;
+  allStations = Object.values(merged);
+  stationMap = merged;
 
+  // 一次性升級舊資料：把專案裡的純 sno（沒前綴）換成帶前綴的版本
+  migrateOldStationIds();
+
+  if (allStations.length === 0) {
+    status.className = "status warn";
+    status.textContent = "全部資料來源失敗：" + errors.join(" / ");
+  } else if (errors.length > 0) {
+    status.className = "status warn";
+    status.textContent = "部分失敗（" + errors.join(" / ") + "）・共 " + allStations.length + " 站";
+  } else {
     status.className = "status ok";
     status.textContent = "已更新 " + new Date().toLocaleTimeString("zh-TW", { hour12: false }) +
                         " ・ 共 " + allStations.length + " 站";
-    renderAll();
-    return true;
-  } catch (err) {
-    console.error(err);
-    status.className = "status warn";
-    status.textContent = "連線失敗：" + err.message;
-    renderAll();
-    return false;
+  }
+  renderAll();
+  return allStations.length > 0;
+}
+
+// =========================================================
+//  舊資料升級：把純 sno 換成帶前綴版（NTPC- / TPE-）
+// =========================================================
+function migrateOldStationIds() {
+  if (projects.length === 0 || allStations.length === 0) return;
+  let changed = false;
+  projects.forEach(p => {
+    p.stationIds = p.stationIds.map(id => {
+      if (stationMap[id]) return id;                     // 已是新格式
+      if (stationMap["NTPC-" + id]) { changed = true; return "NTPC-" + id; }
+      if (stationMap["TPE-"  + id]) { changed = true; return "TPE-"  + id; }
+      return id;
+    });
+  });
+  if (changed) {
+    console.log("已自動升級舊格式站點 ID");
+    saveProjectsToCloud();
   }
 }
 
@@ -537,7 +585,14 @@ function renderProject(p) {
   div.dataset.projectId = p.id;
 
   // 取出該專案的站點資料
-  const stations = p.stationIds.map(sno => stationMap[sno] || { sno, sna: "(載入中…)", sbi: "--", bemp: "--", tot: 0, mday: "" });
+  //  向後相容：舊資料可能存的是純 sno（沒有 NTPC-/TPE- 前綴），
+  //  先用原 ID 找，找不到的話依序加上前綴再找一次。
+  const stations = p.stationIds.map(savedId => {
+    let s = stationMap[savedId];
+    if (!s) s = stationMap["NTPC-" + savedId];
+    if (!s) s = stationMap["TPE-" + savedId];
+    return s || { sno: savedId, sna: "(載入中…)", sbi: "--", bemp: "--", tot: 0, mday: "" };
+  });
 
   // 複製用文字
   const copyLines = stations.map(s => `${s.sna} 在站${s.sbi} 空位${s.bemp}`).join("\n");
@@ -689,7 +744,7 @@ function searchStations(kw) {
 
   const hits = allStations.filter(s => {
     if (alreadyIn.has(s.sno)) return false;
-    return (s.sna + " " + s.ar + " " + s.sarea).toLowerCase().includes(kw);
+    return (s.sna + " " + s.ar + " " + s.sarea + " " + (s.city || "")).toLowerCase().includes(kw);
   }).slice(0, 30);
 
   if (hits.length === 0) {
@@ -698,7 +753,7 @@ function searchStations(kw) {
   }
   results.innerHTML = hits.map(s => `
     <div class="item" data-sno="${s.sno}">
-      <div class="name">${escapeHtml(s.sna)} <span style="color:var(--ink-dim);font-size:11px;">(${escapeHtml(s.sarea)})</span></div>
+      <div class="name">${escapeHtml(s.sna)} <span style="color:var(--accent);font-size:11px;">[${escapeHtml(s.city || "")}]</span> <span style="color:var(--ink-dim);font-size:11px;">(${escapeHtml(s.sarea)})</span></div>
       <div class="addr">${escapeHtml(s.ar)}</div>
     </div>
   `).join("");
